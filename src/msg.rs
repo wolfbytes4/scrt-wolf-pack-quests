@@ -1,13 +1,22 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use cosmwasm_std::{
-   Addr, Binary
+   Addr, Binary, Uint128
 };
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct InstantiateMsg {
-      pub count: i32,
       pub entropy: String,
-      pub quest_contract: ContractInfo
+      pub entropy_shill: String,
+      pub quest_contract: ContractInfo,
+      pub levels: Vec<Level>,
+      pub level_cap: i32,
+      pub shill_contract: ContractInfo
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct Level {
+    pub level: i32,
+    pub xp_needed: i32
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -17,9 +26,13 @@ pub struct Quest {
     pub description: String,
     pub duration_until_join_closed: u64,
     pub duration_in_staking: u64,
-    pub requirements: Vec<Requirement>,
-    pub start_time: Option<i64>,
-    pub create_date: u64
+    pub num_of_nfts: i32,
+    pub start_time: u64,
+    pub create_date: u64,
+    pub xp_reward: i32,
+    pub shill_reward: Uint128,
+    pub shill_trait_bonus_reward: Uint128,
+    pub bonus_reward_traits: Vec<Trait>
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -32,7 +45,8 @@ pub struct Token {
     pub token_id: String,
     pub owner: Addr,
     pub sender: Addr,
-    pub quest_id: i32
+    pub quest_id: i32,
+    pub staked_date: Option<u64>
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -43,12 +57,12 @@ pub struct ContractInfo {
     pub address: Addr,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct Requirement {
-    pub contract_address: String,
-    pub traits: Vec<Trait>
+// #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+// pub struct Requirement {
+//     pub contract_address: String,
+//     pub traits: Vec<Trait>
 
-}
+// }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct Trait {
@@ -58,11 +72,7 @@ pub struct Trait {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum ExecuteMsg {
-    Increment {},
-    Reset {
-      count: i32
-    },
+pub enum ExecuteMsg { 
     StartQuest{
         quest: Quest
     },
@@ -81,17 +91,14 @@ pub enum ExecuteMsg {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum QueryMsg {
-    // GetCount returns the current count as a json-encoded number
-    GetCount {},    
+pub enum QueryMsg { 
     GetQuests {},
-    GetState {}
-}
-
-// We define a custom struct for each query response
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct CountResponse {
-    pub count: i32,
+    GetState {
+        admin: Addr
+    },
+    GetShillBalance {
+        admin: Addr
+    }
 }
 
 // We define a custom struct for each query response
