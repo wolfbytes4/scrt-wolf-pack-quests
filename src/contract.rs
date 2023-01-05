@@ -4,21 +4,19 @@ use cosmwasm_std::{
     Binary, Uint128, CosmosMsg
 };
 use crate::error::ContractError;
-use crate::msg::{QuestResponse, ExecuteMsg, InstantiateMsg, QueryMsg, Quest, ContractInfo, QuestMsg, Token, Level};
-use crate::state::{config, config_read, State, CONFIG_KEY, LEVEL_KEY, ADMIN_KEY};
+use crate::msg::{QuestResponse, ExecuteMsg, InstantiateMsg, QueryMsg, Quest, ContractInfo, QuestMsg, Token, HistoryToken, Level};
+use crate::state::{config, config_read, State, CONFIG_KEY, LEVEL_KEY, ADMIN_KEY, ADMIN_VIEWING_KEY_ITEM, VIEWING_KEY_STORE,
+    CONFIG_ITEM, LEVEL_ITEM, ADMIN_ITEM, STAKED_NFTS_STORE, STAKED_NFTS_HISTORY_STORE};
 use crate::rand::{sha_256};
 use secret_toolkit::{
     snip721::{
         batch_transfer_nft_msg, transfer_nft_msg, nft_dossier_query, register_receive_nft_msg,
         set_viewing_key_msg, set_metadata_msg, ViewerInfo, NftDossier, Transfer
     },
-    snip20::{ balance_query, transfer_msg, Balance },
-    storage:: { Item }
+    snip20::{ balance_query, transfer_msg, Balance }
 }; 
 pub const BLOCK_SIZE: usize = 256;
-pub static CONFIG_ITEM: Item<State> = Item::new(CONFIG_KEY);
-pub static LEVEL_ITEM: Item<Vec<Level>> = Item::new(LEVEL_KEY);
-pub static ADMIN_ITEM: Item<Addr> = Item::new(ADMIN_KEY);
+
 
 #[entry_point]
 pub fn instantiate(
@@ -29,8 +27,7 @@ pub fn instantiate(
 ) -> Result<Response, StdError> {
     let prng_seed: Vec<u8> = sha_256(base64::encode(msg.entropy).as_bytes()).to_vec();
     let viewing_key = base64::encode(&prng_seed);
-    let prng_seed_shill: Vec<u8> = sha_256(base64::encode(msg.entropy_shill).as_bytes()).to_vec();
-    let shill_viewing_key = base64::encode(&prng_seed_shill);
+
     // create initial state
     let state = State {
         quests: vec![],
@@ -42,7 +39,7 @@ pub fn instantiate(
             address: msg.quest_contract.address,
         },
         shill_contract: msg.shill_contract,
-        shill_viewing_key: Some(shill_viewing_key), 
+        shill_viewing_key: Some(msg.entropy_shill), 
         level_cap: msg.level_cap
     };
     // save the contract state
@@ -92,12 +89,21 @@ pub fn execute(
         ExecuteMsg::BatchReceiveNft { from, token_ids, msg } => {
             try_batch_receive(deps, _env, &info.sender, &from, token_ids, msg)
         },
-        ExecuteMsg::SendNftBack { token_id } => {
-            try_send_nft_back(deps, _env, &info.sender, token_id)
+        ExecuteMsg::SendNftBack { token_id, owner } => {
+            try_send_nft_back(deps, _env, &info.sender, token_id, owner)
         },
         ExecuteMsg::ClaimNfts{ token_ids } => {
             try_claim_nfts(deps, _env, &info.sender, token_ids)
-        }
+        },
+        ExecuteMsg::SetViewingKey { key } => try_set_viewing_key(
+            deps,
+            _env, 
+            &info.sender,
+            key
+        ), 
+        ExecuteMsg::SendShillBack { amount, address } => {
+            try_send_shill_back(deps, _env, &info.sender, amount, address)
+        },
     }
 } 
 
@@ -115,6 +121,7 @@ fn try_batch_receive(
      let bytes = base64::decode(bin.to_base64()).unwrap(); // you should handle errors
      let qmsg: QuestMsg = serde_json::from_slice(&bytes).unwrap();
 
+     let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, from).unwrap_or_else(Vec::new);
      let mut state = CONFIG_ITEM.load(deps.storage)?;
      //config(deps.storage).update(|mut state| -> Result<_,ContractError>{
         let quest = state.quests.iter().find(|&x| x.quest_id == qmsg.quest_id).unwrap();
@@ -136,9 +143,11 @@ fn try_batch_receive(
                 quest_id: qmsg.quest_id,
                 staked_date: Some(current_time)
             };
-            state.locked_nfts.push(locked_wolf);
+            //state.locked_nfts.push(locked_wolf);
+            staked_nfts.push(locked_wolf);
         } 
-        CONFIG_ITEM.save(deps.storage, &state)?;
+        STAKED_NFTS_STORE.insert(deps.storage, &from, &staked_nfts)?;
+        //CONFIG_ITEM.save(deps.storage, &state)?;
      //})?;
  
    }
@@ -177,27 +186,35 @@ pub fn try_send_nft_back(
     deps: DepsMut,
     _env: Env,
     sender: &Addr,
-    token_id: String
+    token_id: String,
+    owner: Addr
 ) -> Result<Response, ContractError> { 
     let mut nft = Token{ owner: Addr::unchecked(""), quest_id: 0, sender: Addr::unchecked(""), token_id: "".to_string(), staked_date: None};
     let mut contract: Option<String> = None;
     let mut hash: Option<String> = None;
 
-    let mut state = CONFIG_ITEM.load(deps.storage)?;
+    let state = CONFIG_ITEM.load(deps.storage)?;
+    let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, &owner).unwrap_or_else(Vec::new);
+    if staked_nfts.len() == 0
+    {
+        return Err(ContractError::CustomError {val: "This address does not have anything staked".to_string()});
+    }
+
     //config(deps.storage).update(|mut state| -> Result<_,ContractError>{
         if sender.clone() != state.owner {
             return Err(ContractError::CustomError {val: "You don't have the permissions to execute this command".to_string()});
         }  
-        if let Some(pos) = state.locked_nfts.iter().position(|x| x.token_id == token_id) {
-            nft = state.locked_nfts.swap_remove(pos);
+        if let Some(pos) = staked_nfts.iter().position(|x| x.token_id == token_id) {
+            nft = staked_nfts.swap_remove(pos);
             hash = Some(state.quest_contract.code_hash.to_string());
             contract = Some(state.quest_contract.address.to_string());
         }
         else{
             return Err(ContractError::CustomError {val: "Token doesn't exist".to_string()});
         }
-        
-        CONFIG_ITEM.save(deps.storage, &state)?;
+         
+        STAKED_NFTS_STORE.insert(deps.storage, &owner, &staked_nfts)?;
+        //CONFIG_ITEM.save(deps.storage, &state)?;
     //})?; 
   
     Ok(Response::new()
@@ -218,9 +235,9 @@ pub fn try_claim_nfts(
     _env: Env,
     sender: &Addr,
     token_ids: Vec<String>
-) -> Result<Response, ContractError> { 
-
-    let mut state = CONFIG_ITEM.load(deps.storage)?; 
+) -> Result<Response, ContractError> {  
+    let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, sender).unwrap_or_else(Vec::new);
+    let state = CONFIG_ITEM.load(deps.storage)?; 
     let levels = LEVEL_ITEM.load(deps.storage)?;
     let mut response_msgs: Vec<CosmosMsg> = Vec::new();
 //config(deps.storage).update(|mut state| -> Result<_,ContractError>{
@@ -234,9 +251,9 @@ pub fn try_claim_nfts(
     //check for bonus and add to amount of shill to be sent
     // Iter through nfts being claimed
     for token_id in token_ids.iter() { 
-        if let Some(pos) = state.locked_nfts.iter().position(|x| &x.token_id == token_id && &x.owner == sender) {
+        if let Some(pos) = staked_nfts.iter().position(|x| &x.token_id == token_id && &x.owner == sender) {
             // Remove token from locked nfts and update it's metadata
-            let nft = state.locked_nfts.swap_remove(pos); 
+            let nft = staked_nfts.swap_remove(pos); 
             
             let mut meta: NftDossier =  nft_dossier_query(
                 deps.querier,
@@ -248,7 +265,7 @@ pub fn try_claim_nfts(
                 state.quest_contract.address.to_string(),
             )?;
      
-            let pub_attributes = meta.public_metadata.as_ref().unwrap().extension.as_ref().unwrap().attributes.as_ref().unwrap();
+            let pub_attributes = meta.public_metadata.as_mut().unwrap().extension.as_mut().unwrap().attributes.as_mut().unwrap();
             let current_xp_trait = pub_attributes.iter().find(|&x| x.trait_type == Some("xp".to_string())).unwrap();
             let current_lvl_trait = pub_attributes.iter().find(|&x| x.trait_type == Some("lvl".to_string())).unwrap();
             let quest = state.quests.iter().find(|&x| x.quest_id == nft.quest_id).unwrap();
@@ -277,16 +294,34 @@ pub fn try_claim_nfts(
             amount_to_send += quest.shill_reward;
             //TODO check for trait bonus here
 
+            //add staked nft to history 
+            let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(sender.to_string().to_string().as_bytes());
+            let history_token: HistoryToken = { HistoryToken {
+                token_id: nft.token_id,
+                owner: nft.owner,
+                sender: nft.sender,
+                quest_id: nft.quest_id,
+                staked_date: nft.staked_date,
+                claimed_date: Some(current_time),
+                reward_amount: amount_to_send,
+                xp_reward: quest.xp_reward
+            }};
+            
+            staked_history_store.push(deps.storage, &history_token)?;
+
             //update pub metadata with new xp and level
-            set_metadata_msg(
-                token_id.to_string(),
-                meta.public_metadata,
-                None,
-                None,
-                BLOCK_SIZE,
-                state.quest_contract.code_hash.clone(),
-                state.quest_contract.address.to_string()
-            )?; 
+            //this doesnt work
+            response_msgs.push(
+                set_metadata_msg(
+                    token_id.to_string(),
+                    meta.public_metadata,
+                    None,
+                    None,
+                    BLOCK_SIZE,
+                    state.quest_contract.code_hash.clone(),
+                    state.quest_contract.address.to_string()
+                )?
+            ); 
              
         }
         else{
@@ -337,8 +372,8 @@ pub fn try_claim_nfts(
         
 
     
-    CONFIG_ITEM.save(deps.storage, &state)?;
-    
+    // CONFIG_ITEM.save(deps.storage, &state)?; 
+    STAKED_NFTS_STORE.insert(deps.storage, sender, &staked_nfts)?;
 //})?;
 
 
@@ -349,7 +384,55 @@ pub fn try_claim_nfts(
 
  
 
+pub fn try_set_viewing_key(
+    deps: DepsMut,
+    _env: Env,
+    sender: &Addr,
+    key: String
+) -> Result<Response, ContractError> {
+    let state = CONFIG_ITEM.load(deps.storage)?;
+    let prng_seed: Vec<u8> = sha_256(base64::encode(key).as_bytes()).to_vec();
+    let viewing_key = base64::encode(&prng_seed);
+
+    let vk: ViewerInfo = { ViewerInfo {
+        address: sender.to_string(),
+        viewing_key: viewing_key,
+    } };
+
+    if sender.clone() == state.owner {
+        ADMIN_VIEWING_KEY_ITEM.save(deps.storage, &vk)?;
+    }  
+    else{
+        VIEWING_KEY_STORE.insert(deps.storage, sender, &vk)?;
+    }
  
+    Ok(Response::default())
+}
+
+pub fn try_send_shill_back(
+    deps: DepsMut,
+    _env: Env,
+    sender: &Addr,
+    amount: Uint128,
+    address: Addr
+) -> Result<Response, ContractError> {  
+    let state = CONFIG_ITEM.load(deps.storage)?;
+    if sender.clone() != state.owner {
+        return Err(ContractError::Unauthorized {});
+    }
+   
+    Ok(Response::new().add_message(
+        transfer_msg(
+            address.to_string(),
+            amount,
+            None,
+            None,
+            256,
+            state.shill_contract.code_hash.to_string(),
+            state.shill_contract.address.to_string()
+        )?)
+    ) 
+}
 
 #[entry_point]
 pub fn query(
@@ -359,8 +442,8 @@ pub fn query(
 ) -> StdResult<Binary> {
     match msg { 
         QueryMsg::GetQuests {} => to_binary(&query_quests(deps)?),
-        QueryMsg::GetState {admin} => to_binary(&query_state(deps, admin)?),
-        QueryMsg::GetShillBalance {admin} => to_binary(&query_shill_balance(deps, admin)?)
+        QueryMsg::GetState {viewer} => to_binary(&query_state(deps, viewer)?),
+        QueryMsg::GetStakedNfts {user, viewer} => to_binary(&query_staked_nfts(deps, user, viewer)?)
     }
 }
  
@@ -375,42 +458,52 @@ fn query_quests(
 
 fn query_state(
     deps: Deps,
-    admin: Addr
+    viewer: ViewerInfo
 ) -> StdResult<State> {
-    let admin_key = ADMIN_ITEM.load(deps.storage)?;  
-    
-    if admin_key != admin{
-        return Err(StdError::generic_err("You can't run this query"));
-    }
-    
+    check_admin_key(deps, viewer)?;
+
     let state = CONFIG_ITEM.load(deps.storage)?;  
 
     Ok(state)
 }
 
-fn query_shill_balance(
+fn query_staked_nfts(
     deps: Deps,
-    admin: Addr
-) -> StdResult<Balance> {
-
-    let state = CONFIG_ITEM.load(deps.storage)?; 
-    let admin_key = ADMIN_ITEM.load(deps.storage)?;  
-    if admin_key != admin{
-        return Err(StdError::generic_err("You can't run this query"));
-    } 
-
-    let address = state.quest_contract.address.to_string();
-    let key = state.shill_viewing_key.unwrap();
-    let block_size = 256;
-    let callback_code_hash = state.shill_contract.code_hash.to_string();
-    let contract_addr = state.shill_contract.address.to_string();
-
-    let balance =
-        balance_query(deps.querier, state.quest_contract.address.to_string(), key, block_size, callback_code_hash, contract_addr)?;
-
-    Ok(balance)
+    user: Addr,
+    viewer: ViewerInfo
+) -> StdResult<Vec<Token>> {
+    check_key(deps, viewer)?;
+    let staked_nfts = STAKED_NFTS_STORE.get(deps.storage, &user).unwrap();
+    Ok(staked_nfts)
 }
 
+fn check_admin_key(deps: Deps, viewer: ViewerInfo) -> StdResult<()> {
+    let admin_viewing_key = ADMIN_VIEWING_KEY_ITEM.load(deps.storage)?;  
+    let prng_seed: Vec<u8> = sha_256(base64::encode(viewer.viewing_key).as_bytes()).to_vec();
+    let vk = base64::encode(&prng_seed);
+
+    if vk != admin_viewing_key.viewing_key || viewer.address != admin_viewing_key.address{
+        return Err(StdError::generic_err(
+            "Wrong viewing key for this address or viewing key not set",
+        )); 
+    }
+
+    return Ok(());
+}
+
+fn check_key(deps: Deps, viewer: ViewerInfo) -> StdResult<()> {
+    let viewing_key = VIEWING_KEY_STORE.get(deps.storage, &Addr::unchecked(&viewer.address)).unwrap();
+    let prng_seed: Vec<u8> = sha_256(base64::encode(viewer.viewing_key).as_bytes()).to_vec();
+    let vk = base64::encode(&prng_seed);
+
+    if vk != viewing_key.viewing_key {
+        return Err(StdError::generic_err(
+            "Wrong viewing key for this address or viewing key not set",
+        )); 
+    }
+
+    return Ok(());
+}
 
 #[cfg(test)]
 mod tests {

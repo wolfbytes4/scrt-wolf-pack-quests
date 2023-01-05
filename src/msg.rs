@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use cosmwasm_std::{
    Addr, Binary, Uint128
 };
+use secret_toolkit::{ 
+    snip721:: { ViewerInfo }
+};
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct InstantiateMsg {
       pub entropy: String,
@@ -50,6 +53,18 @@ pub struct Token {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+pub struct HistoryToken {
+    pub token_id: String,
+    pub owner: Addr,
+    pub sender: Addr,
+    pub quest_id: i32,
+    pub staked_date: Option<u64>,
+    pub claimed_date: Option<u64>,
+    pub reward_amount: Uint128,
+    pub xp_reward: i32
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct ContractInfo {
     /// contract's code hash string
     pub code_hash: String,
@@ -82,10 +97,18 @@ pub enum ExecuteMsg {
         msg: Option<Binary>
     },
     SendNftBack{ 
-        token_id: String
+        token_id: String,
+        owner: Addr
     },
     ClaimNfts{ 
         token_ids: Vec<String>
+    },
+    SetViewingKey{
+        key: String
+    },
+    SendShillBack{
+        amount: Uint128,
+        address: Addr
     }
 }
 
@@ -94,10 +117,11 @@ pub enum ExecuteMsg {
 pub enum QueryMsg { 
     GetQuests {},
     GetState {
-        admin: Addr
+        viewer: ViewerInfo
     },
-    GetShillBalance {
-        admin: Addr
+    GetStakedNFTs{
+        user: Addr,
+        viewer: ViewerInfo
     }
 }
 
