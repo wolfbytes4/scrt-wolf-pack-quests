@@ -11,7 +11,7 @@ use crate::rand::{sha_256};
 use secret_toolkit::{
     snip721::{
         batch_transfer_nft_msg, transfer_nft_msg, nft_dossier_query, register_receive_nft_msg,
-        set_viewing_key_msg, set_metadata_msg, ViewerInfo, NftDossier, Transfer
+        set_viewing_key_msg, set_metadata_msg, ViewerInfo, NftDossier, Transfer, Extension, Metadata, Trait
     },
     snip20::{ balance_query, transfer_msg, Balance }
 }; 
@@ -124,7 +124,7 @@ fn try_batch_receive(
      let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, from).unwrap_or_else(Vec::new);
      let mut state = CONFIG_ITEM.load(deps.storage)?;
      //config(deps.storage).update(|mut state| -> Result<_,ContractError>{
-        let quest = state.quests.iter().find(|&x| x.quest_id == qmsg.quest_id).unwrap();
+        let mut quest = state.quests.iter_mut().find(|x| x.quest_id == qmsg.quest_id).unwrap();
         let current_time = _env.block.time.seconds();
         if current_time < quest.start_time || current_time > quest.duration_until_join_closed + quest.start_time {
             return Err(ContractError::CustomError {val: "You can't join this quest".to_string()});
@@ -145,9 +145,10 @@ fn try_batch_receive(
             };
             //state.locked_nfts.push(locked_wolf);
             staked_nfts.push(locked_wolf);
+            quest.wolves_on_the_hunt = quest.wolves_on_the_hunt + 1;
         } 
         STAKED_NFTS_STORE.insert(deps.storage, &from, &staked_nfts)?;
-        //CONFIG_ITEM.save(deps.storage, &state)?;
+        CONFIG_ITEM.save(deps.storage, &state)?;
      //})?;
  
    }
@@ -163,7 +164,7 @@ pub fn try_start_quest(
 ) -> Result<Response, ContractError> { 
 
     let mut state = CONFIG_ITEM.load(deps.storage)?;
-    //config(deps.storage).update(|mut state| -> Result<_,ContractError>{
+    
         if info.sender != state.owner{
             return Err(ContractError::Unauthorized {});
         }
@@ -174,9 +175,9 @@ pub fn try_start_quest(
 
         let mut q = quest;
         q.create_date = _env.block.time.seconds();
+        q.wolves_on_the_hunt = 0;
         state.quests.push(q);
         CONFIG_ITEM.save(deps.storage, &state)?;
-    //})?;
 
     deps.api.debug("quest added");
     Ok(Response::default())
@@ -200,7 +201,6 @@ pub fn try_send_nft_back(
         return Err(ContractError::CustomError {val: "This address does not have anything staked".to_string()});
     }
 
-    //config(deps.storage).update(|mut state| -> Result<_,ContractError>{
         if sender.clone() != state.owner {
             return Err(ContractError::CustomError {val: "You don't have the permissions to execute this command".to_string()});
         }  
@@ -214,8 +214,6 @@ pub fn try_send_nft_back(
         }
          
         STAKED_NFTS_STORE.insert(deps.storage, &owner, &staked_nfts)?;
-        //CONFIG_ITEM.save(deps.storage, &state)?;
-    //})?; 
   
     Ok(Response::new()
         .add_message(transfer_nft_msg(
@@ -240,7 +238,8 @@ pub fn try_claim_nfts(
     let state = CONFIG_ITEM.load(deps.storage)?; 
     let levels = LEVEL_ITEM.load(deps.storage)?;
     let mut response_msgs: Vec<CosmosMsg> = Vec::new();
-//config(deps.storage).update(|mut state| -> Result<_,ContractError>{
+    let mut response_attrs = vec![];
+    
     // Get viewing key for NFTs
     let viewer = Some(ViewerInfo {
         address: _env.contract.address.to_string(),
@@ -248,9 +247,12 @@ pub fn try_claim_nfts(
     });
 
     let mut amount_to_send = Uint128::from(0u32);
+    
     //check for bonus and add to amount of shill to be sent
     // Iter through nfts being claimed
     for token_id in token_ids.iter() { 
+        let mut has_bonus_trait: bool = false;
+
         if let Some(pos) = staked_nfts.iter().position(|x| &x.token_id == token_id && &x.owner == sender) {
             // Remove token from locked nfts and update it's metadata
             let nft = staked_nfts.swap_remove(pos); 
@@ -265,9 +267,6 @@ pub fn try_claim_nfts(
                 state.quest_contract.address.to_string(),
             )?;
      
-            let pub_attributes = meta.public_metadata.as_mut().unwrap().extension.as_mut().unwrap().attributes.as_mut().unwrap();
-            let current_xp_trait = pub_attributes.iter().find(|&x| x.trait_type == Some("xp".to_string())).unwrap();
-            let current_lvl_trait = pub_attributes.iter().find(|&x| x.trait_type == Some("lvl".to_string())).unwrap();
             let quest = state.quests.iter().find(|&x| x.quest_id == nft.quest_id).unwrap();
 
             // Check date if allowed to claim
@@ -277,25 +276,11 @@ pub fn try_claim_nfts(
                 return Err(ContractError::CustomError {val: "You're trying to claim before the staking period is over".to_string()});
             }
 
-            let mut current_xp : i32 = current_xp_trait.value.parse().unwrap();
-            let mut current_lvl: i32 = current_lvl_trait.value.parse().unwrap();
-            
-            let new_xp = current_xp + quest.xp_reward;
-            let shouldbe_lvl = if current_lvl < state.level_cap {
-                levels.iter().find(|&x| x.xp_needed > current_xp).unwrap().level - 1
-                } 
-                else { 
-                    current_lvl 
-                };
-            
-            current_xp = new_xp;
-            current_lvl = shouldbe_lvl;
-            
             amount_to_send += quest.shill_reward;
             //TODO check for trait bonus here
 
             //add staked nft to history 
-            let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(sender.to_string().to_string().as_bytes());
+            let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(sender.to_string().as_bytes());
             let history_token: HistoryToken = { HistoryToken {
                 token_id: nft.token_id,
                 owner: nft.owner,
@@ -309,12 +294,56 @@ pub fn try_claim_nfts(
             
             staked_history_store.push(deps.storage, &history_token)?;
 
-            //update pub metadata with new xp and level
-            //this doesnt work
+            let new_ext = 
+                if let Some(Metadata { extension, .. }) = meta.public_metadata {
+                    if let Some(mut ext) = extension { 
+                        let current_xp_trait = ext.attributes.as_ref().unwrap().iter().find(|&x| x.trait_type == Some("XP".to_string())).unwrap();
+                        let current_lvl_trait = ext.attributes.as_ref().unwrap().iter().find(|&x| x.trait_type == Some("LVL".to_string())).unwrap();
+                        let current_xp = current_xp_trait.value.parse::<i32>().unwrap() + quest.xp_reward;
+                        let current_lvl = current_lvl_trait.value.parse::<i32>().unwrap();
+                        for attr in ext.attributes.as_mut().unwrap().iter_mut() {
+
+                            if attr.trait_type == Some("XP".to_string()) {
+                                attr.value = current_xp.to_string();
+                            }  
+
+                            if attr.trait_type == Some("LVL".to_string()) {
+                                let shouldbe_lvl = if attr.value.parse::<i32>().unwrap() < state.level_cap {
+                                        levels.iter().find(|&x| x.xp_needed > current_xp).unwrap().level - 1
+                                    } 
+                                    else { 
+                                        attr.value.parse::<i32>().unwrap() 
+                                    }; 
+                                attr.value = shouldbe_lvl.to_string();
+
+                                if shouldbe_lvl > current_lvl {
+                                    response_attrs.push(("lvl_increase_".to_string() + &token_id, shouldbe_lvl.to_string()));
+                                }
+                            } 
+                            
+                            if has_bonus_trait == false && quest.bonus_reward_traits.iter().any(|i| i.trait_type==attr.trait_type && i.value == attr.value) {
+                                has_bonus_trait = true;
+                                amount_to_send += quest.shill_trait_bonus_reward;
+                            }
+                        }
+                        ext 
+                    }
+                    else {
+                        return Err(ContractError::CustomError {val: "unable to set metadata with uri".to_string()});
+                    }
+                } 
+                else {
+                    return Err(ContractError::CustomError {val: "unable to get metadata from nft contract".to_string()});
+                };
+           
+
             response_msgs.push(
                 set_metadata_msg(
                     token_id.to_string(),
-                    meta.public_metadata,
+                    Some(Metadata {
+                        token_uri: None,
+                        extension: Some(new_ext),
+                    }),
                     None,
                     None,
                     BLOCK_SIZE,
@@ -369,17 +398,11 @@ pub fn try_claim_nfts(
     
         response_msgs.push(cosmos_msg);  
     }
-        
-
-    
-    // CONFIG_ITEM.save(deps.storage, &state)?; 
+         
     STAKED_NFTS_STORE.insert(deps.storage, sender, &staked_nfts)?;
-//})?;
-
-
-   // Ok(Response::default())
-      
-    Ok(Response::new().add_messages(response_msgs))
+    response_attrs.push(("shill_amount".to_string(), amount_to_send.to_string()));
+ 
+    Ok(Response::new().add_messages(response_msgs).add_attributes(response_attrs))
 }
 
  
@@ -443,7 +466,13 @@ pub fn query(
     match msg { 
         QueryMsg::GetQuests {} => to_binary(&query_quests(deps)?),
         QueryMsg::GetState {viewer} => to_binary(&query_state(deps, viewer)?),
-        QueryMsg::GetStakedNfts {user, viewer} => to_binary(&query_staked_nfts(deps, user, viewer)?)
+        QueryMsg::GetUserStakedNfts {user, viewer} => to_binary(&query_user_staked_nfts(deps, user, viewer)?),
+        QueryMsg::GetNumUserStakedNftHistory { viewer } => to_binary(&query_num_user_staked_nft_history(deps, viewer)?),
+        QueryMsg::GetUserStakedNftHistory {viewer, start_page, page_size} => to_binary(&query_user_staked_nft_history(deps, viewer, start_page, page_size)?),
+        QueryMsg::GetNumStakedNftKeys { viewer } => to_binary(&query_num_staked_keys(deps, viewer)?),
+        QueryMsg::GetStakedNfts { viewer, start_page, page_size } => to_binary(&query_staked_nfts(deps, viewer, start_page, page_size)?)
+       
+        
     }
 }
  
@@ -466,16 +495,60 @@ fn query_state(
 
     Ok(state)
 }
-
-fn query_staked_nfts(
+ 
+fn query_user_staked_nfts(
     deps: Deps,
     user: Addr,
     viewer: ViewerInfo
 ) -> StdResult<Vec<Token>> {
-    check_key(deps, viewer)?;
+    check_key(deps, &viewer)?;
     let staked_nfts = STAKED_NFTS_STORE.get(deps.storage, &user).unwrap();
+ 
     Ok(staked_nfts)
 }
+
+fn query_num_staked_keys(
+    deps: Deps, 
+    viewer: ViewerInfo
+) -> StdResult<u32> {
+    check_admin_key(deps, &viewer)?;
+    let num_staked_keys = STAKED_NFTS_STORE.get_len(deps.storage).unwrap();
+
+    Ok(num_staked_keys)
+}
+
+fn query_staked_nfts(
+    deps: Deps, 
+    viewer: ViewerInfo,
+    start_page: u32, 
+    page_size: u32
+) -> StdResult<Vec<(Addr,Vec<Token>)>> {
+    check_admin_key(deps, &viewer)?; 
+    let staked_nfts = STAKED_NFTS_STORE.paging(deps.storage, start_page, page_size)?;
+    Ok(staked_nfts)
+}
+
+fn query_user_staked_nft_history(
+    deps: Deps, 
+    viewer: ViewerInfo,
+    start_page: u32, 
+    page_size: u32
+) -> StdResult<Vec<HistoryToken>> {
+    check_key(deps, &viewer)?; 
+    let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(viewer.address.to_string().as_bytes());
+    let history = staked_history_store.paging(deps.storage, start_page, page_size)?;
+    Ok(history)
+}
+
+fn query_num_user_staked_nft_history(
+    deps: Deps, 
+    viewer: ViewerInfo
+) -> StdResult<u32> {
+    check_key(deps, &viewer)?; 
+    let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(&viewer.address.to_string().as_bytes());
+    let num = staked_history_store.get_len(deps.storage)?;
+    Ok(num)
+} 
 
 fn check_admin_key(deps: Deps, viewer: ViewerInfo) -> StdResult<()> {
     let admin_viewing_key = ADMIN_VIEWING_KEY_ITEM.load(deps.storage)?;  
@@ -491,9 +564,9 @@ fn check_admin_key(deps: Deps, viewer: ViewerInfo) -> StdResult<()> {
     return Ok(());
 }
 
-fn check_key(deps: Deps, viewer: ViewerInfo) -> StdResult<()> {
+fn check_key(deps: Deps, viewer: &ViewerInfo) -> StdResult<()> {
     let viewing_key = VIEWING_KEY_STORE.get(deps.storage, &Addr::unchecked(&viewer.address)).unwrap();
-    let prng_seed: Vec<u8> = sha_256(base64::encode(viewer.viewing_key).as_bytes()).to_vec();
+    let prng_seed: Vec<u8> = sha_256(base64::encode(&viewer.viewing_key).as_bytes()).to_vec();
     let vk = base64::encode(&prng_seed);
 
     if vk != viewing_key.viewing_key {

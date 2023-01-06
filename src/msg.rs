@@ -4,7 +4,7 @@ use cosmwasm_std::{
    Addr, Binary, Uint128
 };
 use secret_toolkit::{ 
-    snip721:: { ViewerInfo }
+    snip721:: { ViewerInfo, Trait }
 };
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct InstantiateMsg {
@@ -35,7 +35,8 @@ pub struct Quest {
     pub xp_reward: i32,
     pub shill_reward: Uint128,
     pub shill_trait_bonus_reward: Uint128,
-    pub bonus_reward_traits: Vec<Trait>
+    pub bonus_reward_traits: Vec<Trait>,
+    pub wolves_on_the_hunt: i32
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -79,11 +80,11 @@ pub struct ContractInfo {
 
 // }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
-pub struct Trait {
-    pub trait_category: String,
-    pub trait_value: String
-}
+// #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
+// pub struct Trait {
+//     pub trait_category: String,
+//     pub trait_value: String
+// }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -119,8 +120,24 @@ pub enum QueryMsg {
     GetState {
         viewer: ViewerInfo
     },
-    GetStakedNFTs{
+    GetUserStakedNfts{
         user: Addr,
+        viewer: ViewerInfo
+    },
+    GetNumStakedNftKeys{ 
+        viewer: ViewerInfo
+    },
+    GetStakedNfts{
+        viewer: ViewerInfo, 
+        start_page: u32, 
+        page_size: u32 
+    }, 
+    GetUserStakedNftHistory{
+        viewer: ViewerInfo, 
+        start_page: u32, 
+        page_size: u32 
+    },
+    GetNumUserStakedNftHistory{ 
         viewer: ViewerInfo
     }
 }
