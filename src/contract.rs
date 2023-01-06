@@ -4,16 +4,16 @@ use cosmwasm_std::{
     Binary, Uint128, CosmosMsg
 };
 use crate::error::ContractError;
-use crate::msg::{QuestResponse, ExecuteMsg, InstantiateMsg, QueryMsg, Quest, ContractInfo, QuestMsg, Token, HistoryToken, Level};
-use crate::state::{config, config_read, State, CONFIG_KEY, LEVEL_KEY, ADMIN_KEY, ADMIN_VIEWING_KEY_ITEM, VIEWING_KEY_STORE,
+use crate::msg::{QuestResponse, ExecuteMsg, InstantiateMsg, QueryMsg, Quest, ContractInfo, QuestMsg, Token, HistoryToken };
+use crate::state::{ State, ADMIN_VIEWING_KEY_ITEM, VIEWING_KEY_STORE,
     CONFIG_ITEM, LEVEL_ITEM, ADMIN_ITEM, STAKED_NFTS_STORE, STAKED_NFTS_HISTORY_STORE};
 use crate::rand::{sha_256};
 use secret_toolkit::{
     snip721::{
         batch_transfer_nft_msg, transfer_nft_msg, nft_dossier_query, register_receive_nft_msg,
-        set_viewing_key_msg, set_metadata_msg, ViewerInfo, NftDossier, Transfer, Extension, Metadata, Trait
+        set_viewing_key_msg, set_metadata_msg, ViewerInfo, NftDossier, Transfer, Metadata
     },
-    snip20::{ balance_query, transfer_msg, Balance }
+    snip20::{ transfer_msg }
 }; 
 pub const BLOCK_SIZE: usize = 256;
 
@@ -257,7 +257,7 @@ pub fn try_claim_nfts(
             // Remove token from locked nfts and update it's metadata
             let nft = staked_nfts.swap_remove(pos); 
             
-            let mut meta: NftDossier =  nft_dossier_query(
+            let meta: NftDossier =  nft_dossier_query(
                 deps.querier,
                 token_id.to_string(),
                 viewer.clone(),
@@ -511,7 +511,7 @@ fn query_num_staked_keys(
     deps: Deps, 
     viewer: ViewerInfo
 ) -> StdResult<u32> {
-    check_admin_key(deps, &viewer)?;
+    check_admin_key(deps, viewer)?;
     let num_staked_keys = STAKED_NFTS_STORE.get_len(deps.storage).unwrap();
 
     Ok(num_staked_keys)
@@ -523,7 +523,7 @@ fn query_staked_nfts(
     start_page: u32, 
     page_size: u32
 ) -> StdResult<Vec<(Addr,Vec<Token>)>> {
-    check_admin_key(deps, &viewer)?; 
+    check_admin_key(deps, viewer)?; 
     let staked_nfts = STAKED_NFTS_STORE.paging(deps.storage, start_page, page_size)?;
     Ok(staked_nfts)
 }

@@ -1,18 +1,15 @@
-use std::any::type_name;
 use schemars::JsonSchema;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{ Deserialize, Serialize};
 
-use cosmwasm_std::{Addr, Storage, Binary, StdError, StdResult};
+use cosmwasm_std::{Addr, Storage};
 use cosmwasm_storage::{
     singleton, singleton_read, ReadonlySingleton, Singleton,
 };
-use secret_toolkit::{
-    serialization::{Bincode2, Serde},
+use secret_toolkit::{ 
     storage:: { Item, Keymap, AppendStore },
     snip721:: { ViewerInfo }
 };
 use crate::msg::{Quest, Token, HistoryToken, ContractInfo, Level};
-use crate::error::ContractError;
 
 pub static CONFIG_KEY: &[u8] = b"config";
 pub const LEVEL_KEY: &[u8] = b"level";
