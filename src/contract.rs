@@ -42,8 +42,8 @@ pub fn instantiate(
         shill_viewing_key: Some(msg.entropy_shill), 
         level_cap: msg.level_cap
     };
-    // save the contract state
-    // config(deps.storage).save(&state)?; 
+   
+    //Save Contract state
     CONFIG_ITEM.save(deps.storage, &state)?;
     LEVEL_ITEM.save(deps.storage, &msg.levels)?;
     ADMIN_ITEM.save(deps.storage, &info.sender)?;
@@ -116,20 +116,22 @@ fn try_batch_receive(
     msg: Option<Binary>,
 ) -> Result<Response, ContractError> { 
     deps.api.debug(&format!("Batch received"));
-    //return Err(ContractError::CustomError {val: msg.to_string()});  
+     
    if let Some(bin) = msg { 
-     let bytes = base64::decode(bin.to_base64()).unwrap(); // you should handle errors
+     let bytes = base64::decode(bin.to_base64()).unwrap();
      let qmsg: QuestMsg = serde_json::from_slice(&bytes).unwrap();
 
      let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, from).unwrap_or_else(Vec::new);
      let mut state = CONFIG_ITEM.load(deps.storage)?;
-     //config(deps.storage).update(|mut state| -> Result<_,ContractError>{
+     
         let mut quest = state.quests.iter_mut().find(|x| x.quest_id == qmsg.quest_id).unwrap();
         let current_time = _env.block.time.seconds();
+        //check if the quest is still on going
         if current_time < quest.start_time || current_time > quest.duration_until_join_closed + quest.start_time {
             return Err(ContractError::CustomError {val: "You can't join this quest".to_string()});
         }
-        //check if enough wolfs sent
+
+        //check if enough wolfs sent for the quest
         if (token_ids.len() as i32) != quest.num_of_nfts{ 
             return Err(ContractError::CustomError {val: "You did not send the right amount of wolves for this quest".to_string()});
         }
@@ -143,16 +145,19 @@ fn try_batch_receive(
                 quest_id: qmsg.quest_id,
                 staked_date: Some(current_time)
             };
-            //state.locked_nfts.push(locked_wolf);
+            
             staked_nfts.push(locked_wolf);
             quest.wolves_on_the_hunt = quest.wolves_on_the_hunt + 1;
         } 
+
+        // save info about nft in the storage and update number of wolves staked to the quest
         STAKED_NFTS_STORE.insert(deps.storage, &from, &staked_nfts)?;
         CONFIG_ITEM.save(deps.storage, &state)?;
-     //})?;
  
    }
-
+   else{
+    return Err(ContractError::CustomError {val: "Invalid message received".to_string()});
+   }
     Ok(Response::default())
 }
 
