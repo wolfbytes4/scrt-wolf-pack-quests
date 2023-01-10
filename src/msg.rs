@@ -4,7 +4,8 @@ use cosmwasm_std::{
    Addr, Binary, Uint128
 };
 use secret_toolkit::{ 
-    snip721:: { ViewerInfo, Trait }
+    snip721:: { ViewerInfo, Trait },
+    permit:: { Permit }
 };
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
 pub struct InstantiateMsg {
@@ -120,9 +121,8 @@ pub enum QueryMsg {
     GetState {
         viewer: ViewerInfo
     },
-    GetUserStakedNfts{
-        user: Addr,
-        viewer: ViewerInfo
+    GetUserStakedNfts{ 
+        permit: Permit
     },
     GetNumStakedNftKeys{ 
         viewer: ViewerInfo
@@ -133,12 +133,12 @@ pub enum QueryMsg {
         page_size: u32 
     }, 
     GetUserStakedNftHistory{
-        viewer: ViewerInfo, 
+        permit: Permit, 
         start_page: u32, 
         page_size: u32 
     },
     GetNumUserStakedNftHistory{ 
-        viewer: ViewerInfo
+        permit: Permit
     }
 }
 

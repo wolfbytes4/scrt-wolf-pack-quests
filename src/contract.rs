@@ -1,20 +1,21 @@
 use cosmwasm_std::{
     entry_point, to_binary, Env, Deps, DepsMut,
-    MessageInfo, Response, StdError, StdResult, Addr,
+    MessageInfo, Response, StdError, StdResult, Addr, CanonicalAddr,
     Binary, Uint128, CosmosMsg
 };
 use crate::error::ContractError;
 use crate::msg::{QuestResponse, ExecuteMsg, InstantiateMsg, QueryMsg, Quest, ContractInfo, QuestMsg, Token, HistoryToken };
 use crate::state::{ State, ADMIN_VIEWING_KEY_ITEM, VIEWING_KEY_STORE,
-    CONFIG_ITEM, LEVEL_ITEM, ADMIN_ITEM, STAKED_NFTS_STORE, STAKED_NFTS_HISTORY_STORE};
+    CONFIG_ITEM, LEVEL_ITEM, ADMIN_ITEM, STAKED_NFTS_STORE, STAKED_NFTS_HISTORY_STORE, MY_ADDRESS_ITEM, PREFIX_REVOKED_PERMITS};
 use crate::rand::{sha_256};
 use secret_toolkit::{
     snip721::{
         batch_transfer_nft_msg, transfer_nft_msg, nft_dossier_query, register_receive_nft_msg,
         set_viewing_key_msg, set_metadata_msg, ViewerInfo, NftDossier, Transfer, Metadata
     },
+    permit::{validate, Permit, RevokedPermits},
     snip20::{ transfer_msg }
-}; 
+};  
 pub const BLOCK_SIZE: usize = 256;
 
 
@@ -35,7 +36,7 @@ pub fn instantiate(
         owner: info.sender.clone(), 
         viewing_key: Some(viewing_key),
         quest_contract: ContractInfo {
-            code_hash: msg.quest_contract.code_hash,
+            code_hash:  msg.quest_contract.code_hash,
             address: msg.quest_contract.address,
         },
         shill_contract: msg.shill_contract,
@@ -46,7 +47,8 @@ pub fn instantiate(
     //Save Contract state
     CONFIG_ITEM.save(deps.storage, &state)?;
     LEVEL_ITEM.save(deps.storage, &msg.levels)?;
-    ADMIN_ITEM.save(deps.storage, &info.sender)?;
+    ADMIN_ITEM.save(deps.storage, &deps.api.addr_canonicalize(&info.sender.to_string())?)?;
+    MY_ADDRESS_ITEM.save(deps.storage,  &deps.api.addr_canonicalize(&_env.contract.address.to_string())?)?;
 
     deps.api.debug(&format!("Contract was initialized by {}", info.sender));
     
@@ -121,7 +123,7 @@ fn try_batch_receive(
      let bytes = base64::decode(bin.to_base64()).unwrap();
      let qmsg: QuestMsg = serde_json::from_slice(&bytes).unwrap();
 
-     let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, from).unwrap_or_else(Vec::new);
+     let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, &deps.api.addr_canonicalize(&from.to_string())?).unwrap_or_else(Vec::new);
      let mut state = CONFIG_ITEM.load(deps.storage)?;
      
         let mut quest = state.quests.iter_mut().find(|x| x.quest_id == qmsg.quest_id).unwrap();
@@ -151,7 +153,7 @@ fn try_batch_receive(
         } 
 
         // save info about nft in the storage and update number of wolves staked to the quest
-        STAKED_NFTS_STORE.insert(deps.storage, &from, &staked_nfts)?;
+        STAKED_NFTS_STORE.insert(deps.storage, &deps.api.addr_canonicalize(&from.to_string())?, &staked_nfts)?;
         CONFIG_ITEM.save(deps.storage, &state)?;
  
    }
@@ -200,7 +202,7 @@ pub fn try_send_nft_back(
     let mut hash: Option<String> = None;
 
     let state = CONFIG_ITEM.load(deps.storage)?;
-    let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, &owner).unwrap_or_else(Vec::new);
+    let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage,&deps.api.addr_canonicalize(&owner.to_string())?).unwrap_or_else(Vec::new);
     if staked_nfts.len() == 0
     {
         return Err(ContractError::CustomError {val: "This address does not have anything staked".to_string()});
@@ -218,7 +220,7 @@ pub fn try_send_nft_back(
             return Err(ContractError::CustomError {val: "Token doesn't exist".to_string()});
         }
          
-        STAKED_NFTS_STORE.insert(deps.storage, &owner, &staked_nfts)?;
+        STAKED_NFTS_STORE.insert(deps.storage, &deps.api.addr_canonicalize(&owner.to_string())?, &staked_nfts)?;
   
     Ok(Response::new()
         .add_message(transfer_nft_msg(
@@ -239,7 +241,7 @@ pub fn try_claim_nfts(
     sender: &Addr,
     token_ids: Vec<String>
 ) -> Result<Response, ContractError> {  
-    let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, sender).unwrap_or_else(Vec::new);
+    let mut staked_nfts: Vec<Token> = STAKED_NFTS_STORE.get(deps.storage, &deps.api.addr_canonicalize(&sender.to_string())?).unwrap_or_else(Vec::new);
     let state = CONFIG_ITEM.load(deps.storage)?; 
     let levels = LEVEL_ITEM.load(deps.storage)?;
     let mut response_msgs: Vec<CosmosMsg> = Vec::new();
@@ -404,7 +406,7 @@ pub fn try_claim_nfts(
         response_msgs.push(cosmos_msg);  
     }
          
-    STAKED_NFTS_STORE.insert(deps.storage, sender, &staked_nfts)?;
+    STAKED_NFTS_STORE.insert(deps.storage, &deps.api.addr_canonicalize(&sender.to_string())?, &staked_nfts)?;
     response_attrs.push(("shill_amount".to_string(), amount_to_send.to_string()));
  
     Ok(Response::new().add_messages(response_msgs).add_attributes(response_attrs))
@@ -431,7 +433,7 @@ pub fn try_set_viewing_key(
         ADMIN_VIEWING_KEY_ITEM.save(deps.storage, &vk)?;
     }  
     else{
-        VIEWING_KEY_STORE.insert(deps.storage, sender, &vk)?;
+        VIEWING_KEY_STORE.insert(deps.storage, &deps.api.addr_canonicalize(&sender.to_string())?, &vk)?;
     }
  
     Ok(Response::default())
@@ -471,9 +473,9 @@ pub fn query(
     match msg { 
         QueryMsg::GetQuests {} => to_binary(&query_quests(deps)?),
         QueryMsg::GetState {viewer} => to_binary(&query_state(deps, viewer)?),
-        QueryMsg::GetUserStakedNfts {user, viewer} => to_binary(&query_user_staked_nfts(deps, user, viewer)?),
-        QueryMsg::GetNumUserStakedNftHistory { viewer } => to_binary(&query_num_user_staked_nft_history(deps, viewer)?),
-        QueryMsg::GetUserStakedNftHistory {viewer, start_page, page_size} => to_binary(&query_user_staked_nft_history(deps, viewer, start_page, page_size)?),
+        QueryMsg::GetUserStakedNfts {permit} => to_binary(&query_user_staked_nfts(deps, permit)?),
+        QueryMsg::GetNumUserStakedNftHistory { permit } => to_binary(&query_num_user_staked_nft_history(deps, permit)?),
+        QueryMsg::GetUserStakedNftHistory {permit, start_page, page_size} => to_binary(&query_user_staked_nft_history(deps, permit, start_page, page_size)?),
         QueryMsg::GetNumStakedNftKeys { viewer } => to_binary(&query_num_staked_keys(deps, viewer)?),
         QueryMsg::GetStakedNfts { viewer, start_page, page_size } => to_binary(&query_staked_nfts(deps, viewer, start_page, page_size)?)
        
@@ -502,12 +504,12 @@ fn query_state(
 }
  
 fn query_user_staked_nfts(
-    deps: Deps,
-    user: Addr,
-    viewer: ViewerInfo
-) -> StdResult<Vec<Token>> {
-    check_key(deps, &viewer)?;
-    let staked_nfts = STAKED_NFTS_STORE.get(deps.storage, &user).unwrap();
+    deps: Deps, 
+    permit: Permit
+) -> StdResult<Vec<Token>> { 
+    let (user_raw, my_addr) = get_querier(deps, permit)?;
+
+    let staked_nfts = STAKED_NFTS_STORE.get(deps.storage, &user_raw).unwrap();
  
     Ok(staked_nfts)
 }
@@ -527,7 +529,7 @@ fn query_staked_nfts(
     viewer: ViewerInfo,
     start_page: u32, 
     page_size: u32
-) -> StdResult<Vec<(Addr,Vec<Token>)>> {
+) -> StdResult<Vec<(CanonicalAddr,Vec<Token>)>> {
     check_admin_key(deps, viewer)?; 
     let staked_nfts = STAKED_NFTS_STORE.paging(deps.storage, start_page, page_size)?;
     Ok(staked_nfts)
@@ -535,22 +537,24 @@ fn query_staked_nfts(
 
 fn query_user_staked_nft_history(
     deps: Deps, 
-    viewer: ViewerInfo,
+    permit: Permit,
     start_page: u32, 
     page_size: u32
 ) -> StdResult<Vec<HistoryToken>> {
-    check_key(deps, &viewer)?; 
-    let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(viewer.address.to_string().as_bytes());
+    let (user_raw, my_addr) = get_querier(deps, permit)?;
+    
+    let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(&user_raw);
+    //let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(viewer.address.to_string().as_bytes());
     let history = staked_history_store.paging(deps.storage, start_page, page_size)?;
     Ok(history)
 }
 
 fn query_num_user_staked_nft_history(
     deps: Deps, 
-    viewer: ViewerInfo
-) -> StdResult<u32> {
-    check_key(deps, &viewer)?; 
-    let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(&viewer.address.to_string().as_bytes());
+    permit: Permit
+) -> StdResult<u32> { 
+    let (user_raw, my_addr) = get_querier(deps, permit)?;
+    let staked_history_store = STAKED_NFTS_HISTORY_STORE.add_suffix(&user_raw);
     let num = staked_history_store.get_len(deps.storage)?;
     Ok(num)
 } 
@@ -569,18 +573,31 @@ fn check_admin_key(deps: Deps, viewer: ViewerInfo) -> StdResult<()> {
     return Ok(());
 }
 
-fn check_key(deps: Deps, viewer: &ViewerInfo) -> StdResult<()> {
-    let viewing_key = VIEWING_KEY_STORE.get(deps.storage, &Addr::unchecked(&viewer.address)).unwrap();
-    let prng_seed: Vec<u8> = sha_256(base64::encode(&viewer.viewing_key).as_bytes()).to_vec();
-    let vk = base64::encode(&prng_seed);
-
-    if vk != viewing_key.viewing_key {
-        return Err(StdError::generic_err(
-            "Wrong viewing key for this address or viewing key not set",
-        )); 
+fn get_querier(
+    deps: Deps,
+    permit: Permit,
+) -> StdResult<(CanonicalAddr, Option<CanonicalAddr>)> {
+    if let pmt = permit {
+        let me_raw: CanonicalAddr = MY_ADDRESS_ITEM.load(deps.storage)?;
+        let my_address = deps.api.addr_humanize(&me_raw)?;
+        let querier = deps.api.addr_canonicalize(&validate(
+            deps,
+            PREFIX_REVOKED_PERMITS,
+            &pmt,
+            my_address.to_string(),
+            None
+        )?)?;
+        if !pmt.check_permission(&secret_toolkit::permit::TokenPermissions::Owner) {
+            return Err(StdError::generic_err(format!(
+                "Owner permission is required for Stashh minter queries, got permissions {:?}",
+                pmt.params.permissions
+            )));
+        }
+        return Ok((querier, Some(me_raw)));
     }
-
-    return Ok(());
+    return Err(StdError::generic_err(
+        "Unauthorized",
+    ));  
 }
 
 #[cfg(test)]
